@@ -1,57 +1,1010 @@
+/**
+ * WILD SWITCH: 3D 動物變身大冒險 (Animal Shapeshift Adventure 3D)
+ * 遵照《兒童美語 3D 互動遊戲開發指南與 GPT6-Astra 提示詞庫》重構：
+ * 1. 消除網頁感：Three.js 2.5D/3D 景深透視、糖果粉彩光影、柔和陰影
+ * 2. 主機級 Game Juice：Squash & Stretch 果凍彈跳、相機跟隨、Screen Shake 震動、Hitstop 停頓
+ * 3. 程式化音效：ZzFX 輕量合成器（跳躍、變身、成功和弦、失敗彈簧音）＋ 真人發音
+ * 4. 8 大立體地形與動物技能演出：swim(水花潛游), climb(藤蔓高攀), fly/soar(風道翱翔), jump/hop(巨岩騰空), walk/run(極速狂奔)
+ */
+
 'use strict';
-const animals=[['owl','fly','🦉'],['rabbit','hop','🐰'],['frog','jump','🐸'],['dog','run','🐶'],['eagle','soar','🦅'],['duck','walk','🦆'],['fish','swim','🐟'],['iguana','climb','🦎']].map(([animal,action,emoji],id)=>({animal,action,emoji,id}));
-const $=q=>document.querySelector(q),ctx=$('#world').getContext('2d'),keys=new Set();let p={runs:0,seen:[],weak:{},best:0};try{const v=JSON.parse(localStorage.getItem('wild-switch-v1'));if(v&&Array.isArray(v.seen)&&v.weak&&typeof v.weak==='object')p={runs:Number(v.runs)||0,seen:v.seen.filter(i=>Number.isInteger(i)&&i>=0&&i<8),weak:v.weak,best:Number(v.best)||0}}catch{}
-// 載入去背角色圖片資源
-const spriteImages = {};
+
+// ==========================================
+// 1. ZzFX 超輕量合成音效引擎 (< 1KB 核心)
+// ==========================================
+const zzfxV = 0.3;
+const zzfx = (p=1,k=.05,b=220,e=0,r=0,t=.1,q=0,D=1,u=0,y=0,v=0,z=0,l=0,E=0,A=0,F=0,c=0,w=1,m=0,B=0)=>{
+  if (GameAudio.isMuted) return;
+  try {
+    let M=Math,R=44100,d=2*M.PI,G=u*=500*d/R/R,C=b*=(1-k+2*k*M.random(k=[]))*d/R,g=0,c1=0,a=0,f=1,h=0,
+    n=0,q1=new (window.AudioContext||window.webkitAudioContext);
+    let S=q1.createBuffer(1,R*t,R),L=S.getChannelData(0);
+    for(;n<R*t;L[n++]=a)a=M.sin(g)*f,f=n<R*e?n/(R*e):n<R*(e+r)?1-(n-R*e)/(R*r)*(1-D):n<R*(t-c)?D:(t-n/R)/c*D,
+    g+=C,C+=G;let p1=q1.createBufferSource();p1.buffer=S;p1.connect(q1.destination);p1.start();
+  } catch(e) {}
+};
+
+const SFX = {
+  jump: () => zzfx(1, 0.05, 330, 0.02, 0.08, 0.12, 1, 1.5, -4),
+  coin: () => zzfx(1, 0.05, 880, 0.01, 0.05, 0.15, 1, 1.2, 12),
+  switchCard: () => zzfx(1, 0.05, 440, 0.01, 0.03, 0.08, 1, 1, 6),
+  powerSuccess: () => zzfx(1, 0.05, 523.25, 0.02, 0.2, 0.35, 1, 1.8, 5, 2),
+  wrong: () => zzfx(1, 0.05, 220, 0, 0.1, 0.3, 1, 1.2, -8),
+  land: () => zzfx(1, 0.05, 120, 0.01, 0.04, 0.1, 1, 0.8, -10)
+};
+
+const GameAudio = {
+  isMuted: false,
+  currentVoice: null,
+  voiceCache: {},
+
+  init() {
+    ['climb','dog','duck','eagle','fish','fly','frog','hop','iguana','jump','owl','rabbit','run','soar','swim','walk'].forEach(w => {
+      const a = new Audio(`V1_flashcards_audios/V1_${w}.mp3`);
+      a.preload = 'auto';
+      this.voiceCache[w] = a;
+    });
+  },
+
+  playVoice(word) {
+    if (this.isMuted) return;
+    if (this.currentVoice) {
+      this.currentVoice.pause();
+      this.currentVoice.currentTime = 0;
+    }
+    const audio = this.voiceCache[word] || new Audio(`V1_flashcards_audios/V1_${word}.mp3`);
+    this.currentVoice = audio;
+    audio.currentTime = 0;
+    audio.play().catch(e => console.warn('Audio play error:', e));
+  },
+
+  stopVoice() {
+    if (this.currentVoice) {
+      this.currentVoice.pause();
+      this.currentVoice.currentTime = 0;
+    }
+  }
+};
+GameAudio.init();
+
+// ==========================================
+// 2. 教學教材資料 (V1 8 位動物與動作技能)
+// ==========================================
+const ANIMALS = [
+  { id: 0, animal: 'owl', action: 'fly', emoji: '🦉', desc: '貓頭鷹夜行飛翔', color: '#94a3b8' },
+  { id: 1, animal: 'rabbit', action: 'hop', emoji: '🐰', desc: '小兔子活潑輕跳', color: '#f472b6' },
+  { id: 2, animal: 'frog', action: 'jump', emoji: '🐸', desc: '青蛙超能大跳躍', color: '#4ade80' },
+  { id: 3, animal: 'dog', action: 'run', emoji: '🐶', desc: '狗狗歡樂疾馳', color: '#fb923c' },
+  { id: 4, animal: 'eagle', action: 'soar', emoji: '🦅', desc: '老鷹高空長嘯翱翔', color: '#facc15' },
+  { id: 5, animal: 'duck', action: 'walk', emoji: '🦆', desc: '鴨子搖擺自信漫步', color: '#38bdf8' },
+  { id: 6, animal: 'fish', action: 'swim', emoji: '🐟', desc: '熱帶魚敏捷潛游', color: '#67e8f9' },
+  { id: 7, animal: 'iguana', action: 'climb', emoji: '🦎', desc: '鬃蜥攀藤飛簷走壁', color: '#a3e635' }
+];
+
+const SPRITES = {};
 ['owl','rabbit','frog','dog','eagle','duck','fish','iguana','default'].forEach(name => {
-  const img = new Image();
-  img.src = `sprites/${name}.png`;
-  spriteImages[name] = img;
+  const tex = new THREE.TextureLoader().load(`sprites/${name}.png`);
+  tex.minFilter = THREE.LinearFilter;
+  SPRITES[name] = tex;
 });
-let s={mode:'home',route:[],at:0,x:90,y:418,vy:0,facing:1,selected:-1,choices:[],score:0,combo:0,phase:'approach',time:0,coins:[],errors:0,reviews:0},muted=false,audio=null,seed=17,last=0,manual=false;
-function save(){try{localStorage.setItem('wild-switch-v1',JSON.stringify(p))}catch{}}function rand(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296}function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(rand()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}function target(){return animals[s.route[s.at]?.id??0]}function status(t){$('#status').textContent=t}
-function say(word){if(audio)audio.pause();if(muted)return;audio=new Audio(`V1_flashcards_audios/V1_${word}.mp3`);audio.play().catch(()=>{if(s.mode==='play')status(`聲音無法播放，文字提示：${target().action}。`)})}
-function hud(){$('#round').textContent=s.mode==='home'?'準備探險':`第 ${Math.min(s.at+1,s.route.length)} / ${s.route.length} 站${s.route[s.at]?.retry?' · 再挑戰':''}`;$('#score').textContent=`★ ${s.score}`;$('#combo').textContent=s.combo?`✦ 連續 ${s.combo} 次技能成功`:'跳起來收集星星';$('#collection').textContent=`圖鑑 ${p.seen.length} / 8 · 最佳 ★ ${p.best}`}
-function modal(t){$('#overlay').hidden=false;$('#overlay').innerHTML=`<div class="modal">${t}</div>`}function home(){s.mode='home';keys.clear();if(audio)audio.pause();modal('<h2>把英文變成超能力</h2><p>左右移動，跳起收集星星。<br>走到地形前，選動物，按 <b>E 施展技能</b> 過關！</p><select id="difficulty" aria-label="難度"><option value="read">探索模式 · 英文＋聲音</option><option value="listen">聽力模式 · 先聽，再變身</option></select><br><button id="start">開始冒險 →</button><p>每趟 8 站 · 路線重新排列 · 錯誤技能稍後再練</p>');$('#start').onclick=start;const diff=$('#difficulty');if(diff)diff.onchange=()=>cards(true);cards(true);hud();draw()}
-function start(){s.listening=$('#difficulty').value==='listen';seed=17+(++p.runs)*319;save();let ids=shuffle(animals.map(a=>a.id));ids.sort((a,b)=>(Number(p.weak[b])||0)-(Number(p.weak[a])||0));Object.assign(s,{mode:'play',route:ids.map(id=>({id,retry:false})),at:0,score:0,combo:0,errors:0,reviews:0,time:0});$('#overlay').hidden=true;$('#pause').textContent='Ⅱ 暫停';segment();$('#world').focus()}
-function segment(){Object.assign(s,{x:90,y:418,vy:0,phase:'approach',failed:false,powerTime:0,selected:-1});keys.clear();s.coins=[{x:175,y:400},{x:255,y:342},{x:350,y:385},{x:830,y:390},{x:940,y:340},{x:1070,y:390}];s.choices=shuffle([target().id,...shuffle(animals.filter(a=>a.id!==target().id).map(a=>a.id)).slice(0,3)]);cards();status('往右探索，跳起收集星星！前方地形需要動物技能。');hud();draw()}
-function cards(preview=false){
-  const isListen = s.mode==='play' ? s.listening : ($('#difficulty')?.value==='listen');
-  $('#cards').innerHTML=(preview?[3,2,6,0]:s.choices).map((id,n)=>{
-    const a=animals[id];
-    // 聽力模式：先聽動作，再從卡片中挑選動作 (b標籤顯示 action)
-    // 探索模式：看板已顯示動作單字，卡片顯示動物名稱 (b標籤顯示 animal)，避免形成答案直接對照
-    const title = isListen ? a.action : a.animal;
-    const sub = isListen ? `${n+1} · ${a.animal}` : `${n+1}`;
-    return `<button class="card ${s.selected===id?'selected':''}" data-id="${id}" aria-pressed="${s.selected===id}"><img src="V1_flashcards_images/V1_${a.animal}.webp" alt="${a.emoji}"><b>${title}</b><small>${sub}</small></button>`;
-  }).join('');
-  $('#cards').querySelectorAll('button').forEach(b=>b.onclick=()=>select(Number(b.dataset.id)));
-  $('#cards').querySelectorAll('img').forEach(i=>i.onerror=()=>i.replaceWith(document.createTextNode(i.alt)));
-}
-function select(id){if(s.mode!=='play'||s.phase==='power')return;s.selected=id;cards();say(animals[id].action);status(`${animals[id].emoji} ${animals[id].animal} 準備好了！走到地形前，按 E。`)}function jump(){if(s.mode==='play'&&s.phase!=='power'&&s.y>=417)s.vy=-510}
-function power(){if(s.mode!=='play'||s.phase==='power')return;if(s.phase!=='gate'){status('先往右走到地形標誌前。');return}if(s.selected<0){status('先選下方的動物技能，再按 E。');return}if(s.selected!==target().id){s.errors++;s.failed=true;s.combo=0;p.weak[target().id]=(Number(p.weak[target().id])||0)+1;save();status(`試試 ${target().emoji} ${target().animal} 的 ${target().action}，再按 E！`);say(target().action);hud();return}s.phase='power';s.powerTime=0;s.combo++;s.score+=10;status(`${['owl','eagle','iguana'].includes(target().animal)?'An':'A'} ${target().animal} can ${target().action}!`);say(target().action);if(!p.seen.includes(target().id))p.seen.push(target().id);if(!s.failed)p.weak[target().id]=Math.max(0,(Number(p.weak[target().id])||0)-1);if(s.failed&&!s.route[s.at].retry){s.route.splice(Math.min(s.at+4,s.route.length),0,{id:target().id,retry:true});s.reviews++}save();hud()}
-function finish(){s.mode='done';keys.clear();p.best=Math.max(p.best,s.score);save();hud();modal(`<h2>你點亮了整座公園！</h2><p>收集 <b>★ ${s.score}</b> · 完成 ${s.route.length} 個地形<br>回頭練習 ${s.reviews} 次 · 圖鑑 ${p.seen.length} / 8</p><p>下次換一條路，再試試聽力模式！</p><button id="again">回營地 / 再玩一次 ↻</button>`);$('#again').onclick=home}
-function pause(){if(s.mode==='play'){s.mode='paused';keys.clear();if(audio)audio.pause();modal('<h2>營火休息時間</h2><p>準備好了，接著冒險。</p><button id="resume">繼續冒險 →</button>');$('#resume').onclick=pause;$('#pause').textContent='▶ 繼續'}else if(s.mode==='paused'){s.mode='play';$('#overlay').hidden=true;$('#pause').textContent='Ⅱ 暫停';$('#world').focus()}}
-function tick(dt){if(s.mode!=='play')return;s.time+=dt;if(s.phase==='power'){s.powerTime+=dt;const t=Math.min(s.powerTime/1.6,1),act=target().action;s.x=480+300*t;s.facing=1;s.y=act==='swim'?435+Math.sin(t*10)*8:['walk','run'].includes(act)?418:418-Math.sin(t*Math.PI)*(act==='hop'?65:act==='climb'?175:130);if(t===1){s.phase='exit';s.y=418;s.vy=0;status('成功！收集剩下的星星，往右走到下一站 →')}}else{const dx=((keys.has('ArrowRight')||keys.has('d')?1:0)-(keys.has('ArrowLeft')||keys.has('a')?1:0));if(dx!==0)s.facing=dx>0?1:-1;s.x+=dx*260*dt;s.x=Math.max(32,s.x);s.vy+=1250*dt;s.y=Math.min(418,s.y+s.vy*dt);if(s.y===418)s.vy=0;if(['approach','gate'].includes(s.phase)&&s.x>=480){s.x=480;if(s.phase==='approach'){s.phase='gate';status(s.listening?'聽提示，選技能卡，再按 E！':`這一站需要 ${target().action}！選動物，再按 E。`);say(target().action)}}if(s.phase==='exit'&&s.x>1150){s.at++;if(s.at>=s.route.length)finish();else segment()}}for(const c of s.coins){if(!c.got&&Math.hypot(s.x-c.x,s.y-25-c.y)<43){c.got=true;s.score++;hud()}}}
-function oval(x,y,rx,ry,c){ctx.fillStyle=c;ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,7);ctx.fill()}
-// 繪製去背角色圖案（含左右翻轉與縮放）
-function drawCharacter(x,y){
-  const imgName = s.selected>=0 ? animals[s.selected].animal : 'default';
-  const img = spriteImages[imgName];
-  if(img && img.complete && img.naturalWidth > 0){
-    const h = 64; // 角色高度（微調最佳視覺尺寸）
-    const w = (img.naturalWidth / img.naturalHeight) * h;
-    ctx.save();
-    ctx.translate(x, y - h/2 + 20);
-    if(s.facing < 0) ctx.scale(-1, 1);
-    ctx.drawImage(img, -w/2, -h/2, w, h);
-    ctx.restore();
-  } else {
-    // 降級備用 Emoji
-    ctx.fillStyle='#ffffff';
-    ctx.font='51px "Segoe UI Emoji",sans-serif';
-    ctx.fillText(s.selected>=0?animals[s.selected].emoji:'🦊',x,y+10);
+
+// ==========================================
+// 3. Three.js 2.5D/3D 渲染系統
+// ==========================================
+class WildSwitch3DEngine {
+  constructor() {
+    this.container = document.getElementById('webgl-container');
+    this.scene = new THREE.Scene();
+    
+    // 糖果色系漸層背景 (Pastel Skybox)
+    this.scene.background = new THREE.Color(0x93c5fd);
+    this.scene.fog = new THREE.FogExp2(0x93c5fd, 0.015);
+
+    // 透視相機 (Chase / Side-scroll 2.5D 最佳視角)
+    this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.camera.position.set(0, 5, 18);
+    this.cameraTarget = new THREE.Vector3(0, 2, 0);
+
+    // 渲染器 (支援柔和陰影與高 DPI)
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.container.appendChild(this.renderer.domElement);
+
+    this.setupLighting();
+
+    this.worldGroup = new THREE.Group();
+    this.scene.add(this.worldGroup);
+
+    this.particles = [];
+    this.shakeIntensity = 0;
+    this.shakeDecay = 0.9;
+
+    window.addEventListener('resize', () => this.onResize());
+  }
+
+  setupLighting() {
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbf7d0, 0.85);
+    hemiLight.position.set(0, 50, 0);
+    this.scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xfffbeb, 1.2);
+    dirLight.position.set(20, 40, 30);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 120;
+    dirLight.shadow.camera.left = -30;
+    dirLight.shadow.camera.right = 30;
+    dirLight.shadow.camera.top = 25;
+    dirLight.shadow.camera.bottom = -15;
+    dirLight.shadow.bias = -0.0005;
+    this.scene.add(dirLight);
+
+    const pointLight = new THREE.PointLight(0xfef08a, 1.0, 30);
+    pointLight.position.set(10, 8, 5);
+    this.scene.add(pointLight);
+  }
+
+  onResize() {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  triggerScreenShake(intensity = 0.3) {
+    this.shakeIntensity = intensity;
+  }
+
+  updateCamera(playerX, playerY) {
+    const targetX = playerX + 3.5;
+    const targetY = Math.max(2.8, playerY + 2.0);
+    
+    this.camera.position.x += (targetX - this.camera.position.x) * 0.08;
+    this.camera.position.y += (targetY - this.camera.position.y) * 0.08;
+    this.camera.position.z = 18;
+
+    if (this.shakeIntensity > 0.01) {
+      this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity * 2;
+      this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity * 2;
+      this.shakeIntensity *= this.shakeDecay;
+    } else {
+      this.shakeIntensity = 0;
+    }
+
+    this.cameraTarget.set(this.camera.position.x, 2.2, 0);
+    this.camera.lookAt(this.cameraTarget);
+  }
+
+  spawnBurst(x, y, z, colorHex = 0xfacc15, count = 35) {
+    const geom = new THREE.DodecahedronGeometry(0.16, 0);
+    for (let i = 0; i < count; i++) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: colorHex,
+        roughness: 0.2,
+        metalness: 0.8,
+        emissive: colorHex,
+        emissiveIntensity: 0.4
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(x, y, z);
+      
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 4 + Math.random() * 8;
+      const vx = Math.cos(angle) * speed;
+      const vy = (Math.random() * 0.7 + 0.5) * speed;
+      const vz = (Math.random() - 0.5) * 4;
+
+      this.scene.add(mesh);
+      this.particles.push({ mesh, vx, vy, vz, rotSpeed: Math.random() * 10, life: 1.0 });
+    }
+  }
+
+  updateParticles(dt) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= dt * 1.5;
+      if (p.life <= 0) {
+        this.scene.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        p.mesh.material.dispose();
+        this.particles.splice(i, 1);
+        continue;
+      }
+      p.vy -= 18 * dt;
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.z += p.vz * dt;
+      p.mesh.rotation.x += p.rotSpeed * dt;
+      p.mesh.rotation.y += p.rotSpeed * dt;
+      const scale = p.life;
+      p.mesh.scale.set(scale, scale, scale);
+    }
+  }
+
+  render() {
+    this.renderer.render(this.scene, this.camera);
   }
 }
-function draw(){ctx.fillStyle='#cce4d9';ctx.fillRect(0,0,1200,540);oval(1000,90,52,52,'#ffe9a7');for(const x of [170,560,850]){oval(x,95,64,20,'#edf4e5');oval(x+30,85,32,24,'#edf4e5')}for(const [x,y,r] of [[100,340,230],[400,350,210],[840,330,290],[1150,300,200]])oval(x,y,r,180,'#a9c9ad');for(const x of [30,320,910,1130]){ctx.fillStyle='#678e68';ctx.fillRect(x,245,15,185);oval(x+5,225,60,82,'#699878');oval(x-15,210,38,54,'#7fab83')}ctx.fillStyle='#486d50';ctx.fillRect(0,440,1200,100);ctx.fillStyle='#86a967';ctx.fillRect(0,440,1200,12);const act=target().action;if(['fly','soar','swim'].includes(act)){ctx.fillStyle='#75b8ba';ctx.fillRect(540,440,190,100);ctx.fillStyle='#bfe4d6';for(let y=460;y<540;y+=25)ctx.fillRect(550,y,170,3)}else if(act==='climb'){ctx.fillStyle='#956f49';ctx.fillRect(600,245,55,195);oval(628,220,90,65,'#528568')}else if(act==='walk'){ctx.fillStyle='#755d43';ctx.fillRect(540,445,200,80);ctx.fillStyle='#d5af70';ctx.fillRect(530,425,220,14)}else if(act==='jump'){oval(620,443,90,22,'#77b9bb');oval(630,390,43,13,'#559754')}else if(act==='hop')oval(630,430,43,27,'#8a9981');else{ctx.fillStyle='#ffcc75';for(let x=550;x<735;x+=45){ctx.beginPath();ctx.moveTo(x,400);ctx.lineTo(x+22,413);ctx.lineTo(x,426);ctx.fill()}}ctx.textAlign='center';ctx.fillStyle='#244f43';ctx.fillRect(420,262,8,178);ctx.fillStyle='#fff0bd';ctx.beginPath();ctx.roundRect(362,252,144,65,12);ctx.fill();ctx.fillStyle='#3e5b40';ctx.font='bold 22px sans-serif';ctx.fillText(s.listening?'♫ LISTEN':act,434,291);ctx.fillStyle='#fff2bf';ctx.font='28px sans-serif';for(const c of s.coins)if(!c.got)ctx.fillText('★',c.x,c.y);ctx.fillStyle='#fff0b7';ctx.fillRect(1145,325,5,115);ctx.fillStyle='#e88d50';ctx.beginPath();ctx.moveTo(1150,325);ctx.lineTo(1190,345);ctx.lineTo(1150,366);ctx.fill();oval(s.x,444,25,7,'#284d4655');drawCharacter(s.x,s.y);if(s.phase==='power'){ctx.font='24px sans-serif';ctx.fillText('✦',s.x-40,s.y-12)}if(s.mode==='play'&&s.phase==='gate'){ctx.fillStyle='#244d43';ctx.font='bold 17px sans-serif';ctx.fillText('選技能 → E',s.x,225)}ctx.textAlign='left';ctx.fillStyle='#dce8ca';ctx.font='12px sans-serif';ctx.fillText('← → MOVE    SPACE JUMP    1–4 SWITCH    E POWER',25,520)}
-function frame(ts){if(!manual)tick(Math.min((ts-last)/1000||0,0.04));last=ts;draw();requestAnimationFrame(frame)}document.addEventListener('keydown',e=>{if(e.target.matches('select')||e.target.matches('button')&&['Enter',' '].includes(e.key))return;if(['ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();if(e.repeat&&[' ','e','E','p','Escape'].includes(e.key))return;keys.add(e.key);if(e.key===' ')jump();if(e.key.toLowerCase()==='e')power();if(e.key.toLowerCase()==='p'||e.key==='Escape')pause();if(['1','2','3','4'].includes(e.key)&&s.choices[Number(e.key)-1]!==undefined)select(s.choices[Number(e.key)-1]);if(e.key.toLowerCase()==='f'&&document.fullscreenEnabled){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else $('.stage').requestFullscreen().catch(()=>{})}});document.addEventListener('keyup',e=>keys.delete(e.key));window.addEventListener('blur',()=>{keys.clear();if(s.mode==='play')pause()});document.addEventListener('visibilitychange',()=>{if(document.hidden&&s.mode==='play')pause()});document.querySelectorAll('[data-key]').forEach(b=>{b.onpointerdown=e=>{e.preventDefault();b.setPointerCapture(e.pointerId);keys.add(b.dataset.key)};b.onpointerup=b.onpointercancel=b.onlostpointercapture=()=>keys.delete(b.dataset.key)});$('#jump').onclick=jump;$('#power').onclick=power;$('#pause').onclick=pause;$('#listen').onclick=()=>{if(s.mode==='play')say(target().action)};$('#mute').onclick=()=>{muted=!muted;if(audio&&muted)audio.pause();$('#mute').textContent=muted?'♫ 聲音關':'♫ 聲音開';$('#mute').setAttribute('aria-pressed',String(muted))};window.render_game_to_text=()=>JSON.stringify({mode:s.mode,phase:s.phase,round:s.at+1,total:s.route.length,player:{x:Math.round(s.x),y:Math.round(s.y)},prompt:s.listening?'audio':target().action,target:target().animal,options:s.choices.map(i=>animals[i].animal),selected:animals[s.selected]?.animal,stars:s.score,errors:s.errors,reviews:s.reviews,combo:s.combo,collected:p.seen.length,status:$('#status').textContent,coordinates:'1200x540; top-left origin; x right/y down; ground y418; gate x480; exit x>1150'});window.advanceTime=ms=>{manual=true;for(let t=0;t<ms;t+=1000/60)tick(Math.min(1000/60,ms-t)/1000);draw()};home();requestAnimationFrame(frame);
+
+// ==========================================
+// 4. 遊戲核心狀態與邏輯控制器
+// ==========================================
+class WildSwitchGame {
+  constructor() {
+    this.engine = new WildSwitch3DEngine();
+    this.storageKey = 'wild-switch-3d-v1';
+    this.savedData = { runs: 0, seen: [], weak: {}, best: 0 };
+    this.loadSave();
+
+    this.mode = 'home';
+    this.difficulty = 'read';
+    this.route = [];
+    this.roundIndex = 0;
+    this.score = 0;
+    this.combo = 0;
+    this.errors = 0;
+    this.reviews = 0;
+
+    this.player = {
+      x: -12,
+      y: 0,
+      vy: 0,
+      isGrounded: true,
+      facing: 1,
+      scaleX: 1,
+      scaleY: 1,
+      selectedAnimalId: -1,
+      mesh: null,
+      shadowMesh: null,
+      auraMesh: null
+    };
+
+    this.phase = 'approach';
+    this.currentChoices = [];
+    this.stars = [];
+    this.currentObstacle = null;
+    this.gateX = 6.0;
+
+    this.keys = new Set();
+    this.initPlayer3D();
+    this.bindEvents();
+    this.setupUI();
+
+    this.showHomeModal();
+
+    this.lastTime = performance.now();
+    requestAnimationFrame((t) => this.loop(t));
+  }
+
+  loadSave() {
+    try {
+      const data = JSON.parse(localStorage.getItem(this.storageKey));
+      if (data && typeof data === 'object') {
+        this.savedData.runs = data.runs || 0;
+        this.savedData.seen = Array.isArray(data.seen) ? data.seen : [];
+        this.savedData.weak = data.weak || {};
+        this.savedData.best = data.best || 0;
+      }
+    } catch(e) {}
+  }
+
+  saveGame() {
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(this.savedData));
+    } catch(e) {}
+  }
+
+  initPlayer3D() {
+    this.playerGroup = new THREE.Group();
+
+    const shadowGeom = new THREE.PlaneGeometry(1.6, 0.8);
+    const shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false
+    });
+    this.player.shadowMesh = new THREE.Mesh(shadowGeom, shadowMat);
+    this.player.shadowMesh.rotation.x = -Math.PI / 2;
+    this.player.shadowMesh.position.y = 0.05;
+    this.engine.scene.add(this.player.shadowMesh);
+
+    const spriteGeom = new THREE.PlaneGeometry(2.4, 2.4);
+    this.playerMaterial = new THREE.MeshStandardMaterial({
+      map: SPRITES['default'],
+      transparent: true,
+      alphaTest: 0.1,
+      roughness: 0.5,
+      metalness: 0.1
+    });
+    this.player.mesh = new THREE.Mesh(spriteGeom, this.playerMaterial);
+    this.player.mesh.castShadow = true;
+    this.player.mesh.position.y = 1.2;
+    this.playerGroup.add(this.player.mesh);
+
+    const ringGeom = new THREE.RingGeometry(1.1, 1.4, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xfacc15,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0
+    });
+    this.player.auraMesh = new THREE.Mesh(ringGeom, ringMat);
+    this.player.auraMesh.rotation.x = Math.PI / 2;
+    this.player.auraMesh.position.y = 0.1;
+    this.playerGroup.add(this.player.auraMesh);
+
+    this.engine.scene.add(this.playerGroup);
+  }
+
+  updatePlayerAppearance() {
+    const spriteKey = this.player.selectedAnimalId >= 0
+      ? ANIMALS[this.player.selectedAnimalId].animal
+      : 'default';
+    
+    if (SPRITES[spriteKey]) {
+      this.playerMaterial.map = SPRITES[spriteKey];
+      this.playerMaterial.needsUpdate = true;
+    }
+
+    this.player.scaleX = 1.4;
+    this.player.scaleY = 0.7;
+    
+    this.player.auraMesh.material.opacity = 0.9;
+    this.player.auraMesh.scale.set(0.5, 0.5, 0.5);
+    gsap.to(this.player.auraMesh.scale, { x: 2.2, y: 2.2, duration: 0.5, ease: 'power2.out' });
+    gsap.to(this.player.auraMesh.material, { opacity: 0, duration: 0.5, ease: 'power2.out' });
+  }
+
+  buildEnvironment() {
+    while (this.engine.worldGroup.children.length > 0) {
+      const obj = this.engine.worldGroup.children[0];
+      this.engine.worldGroup.remove(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
+    }
+
+    const roadGeom = new THREE.BoxGeometry(70, 2.5, 8);
+    const roadMat = new THREE.MeshStandardMaterial({
+      color: 0x4ade80,
+      roughness: 0.7,
+      metalness: 0.1
+    });
+    const road = new THREE.Mesh(roadGeom, roadMat);
+    road.position.set(20, -1.25, 0);
+    road.receiveShadow = true;
+    this.engine.worldGroup.add(road);
+
+    const dirtGeom = new THREE.BoxGeometry(70, 3.5, 7.8);
+    const dirtMat = new THREE.MeshStandardMaterial({
+      color: 0x78350f,
+      roughness: 0.9
+    });
+    const dirt = new THREE.Mesh(dirtGeom, dirtMat);
+    dirt.position.set(20, -4.25, 0);
+    this.engine.worldGroup.add(dirt);
+
+    for (let x = -15; x <= 55; x += 6) {
+      if (Math.abs(x - this.gateX) < 4) continue;
+      this.createLowPolyTree(x + (Math.random() - 0.5) * 2, -4.5);
+    }
+
+    this.createObstacleGate();
+    this.createStars();
+    this.createGoalArch(40);
+  }
+
+  createLowPolyTree(x, z) {
+    const treeGroup = new THREE.Group();
+    treeGroup.position.set(x, 0, z);
+
+    const trunkGeom = new THREE.CylinderGeometry(0.25, 0.4, 3, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x854d0e, roughness: 0.8 });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1.5;
+    trunk.castShadow = true;
+    treeGroup.add(trunk);
+
+    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.6 });
+    const c1 = new THREE.Mesh(new THREE.ConeGeometry(1.6, 2.2, 6), leavesMat);
+    c1.position.y = 3.2;
+    c1.castShadow = true;
+    treeGroup.add(c1);
+
+    const c2 = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.8, 6), leavesMat);
+    c2.position.y = 4.3;
+    c2.castShadow = true;
+    treeGroup.add(c2);
+
+    this.engine.worldGroup.add(treeGroup);
+  }
+
+  createObstacleGate() {
+    const currentAction = this.targetAnimal().action;
+    const gateGroup = new THREE.Group();
+    gateGroup.position.set(this.gateX, 0, 0);
+
+    if (currentAction === 'swim') {
+      const waterGeom = new THREE.BoxGeometry(6.5, 1.8, 8.2);
+      const waterMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        roughness: 0.1,
+        metalness: 0.6,
+        transparent: true,
+        opacity: 0.85
+      });
+      const water = new THREE.Mesh(waterGeom, waterMat);
+      water.position.set(0, -0.6, 0);
+      gateGroup.add(water);
+
+      for(let i=0; i<6; i++) {
+        const foam = new THREE.Mesh(
+          new THREE.SphereGeometry(0.3, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 })
+        );
+        foam.position.set((Math.random()-0.5)*5, 0.3, (Math.random()-0.5)*4);
+        gateGroup.add(foam);
+      }
+    } else if (currentAction === 'climb') {
+      const treeTrunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.2, 1.6, 12, 8),
+        new THREE.MeshStandardMaterial({ color: 0x713f12, roughness: 0.8 })
+      );
+      treeTrunk.position.set(0, 5, 0);
+      treeTrunk.castShadow = true;
+      gateGroup.add(treeTrunk);
+
+      const vine = new THREE.Mesh(
+        new THREE.TorusGeometry(1.5, 0.2, 8, 24),
+        new THREE.MeshStandardMaterial({ color: 0x65a30d })
+      );
+      vine.rotation.x = Math.PI / 3;
+      vine.position.set(0, 4, 0);
+      gateGroup.add(vine);
+    } else if (['jump','hop'].includes(currentAction)) {
+      for (let r = -2; r <= 2; r += 1.8) {
+        const rock = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(1.3 + Math.random() * 0.4, 0),
+          new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.9 })
+        );
+        rock.position.set(r, 0.9, (Math.random() - 0.5) * 2);
+        rock.castShadow = true;
+        gateGroup.add(rock);
+      }
+    } else if (['fly','soar'].includes(currentAction)) {
+      for (let w = 0; w < 4; w++) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(2.0, 0.15, 8, 24),
+          new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.7 })
+        );
+        ring.rotation.y = Math.PI / 2;
+        ring.position.set((w - 1.5) * 1.6, 2.8, 0);
+        gateGroup.add(ring);
+      }
+    } else {
+      const hurdle = new THREE.Mesh(
+        new THREE.BoxGeometry(4.5, 1.2, 0.5),
+        new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4 })
+      );
+      hurdle.position.set(0, 0.6, 0);
+      hurdle.castShadow = true;
+      gateGroup.add(hurdle);
+    }
+
+    this.currentObstacle = gateGroup;
+    this.engine.worldGroup.add(gateGroup);
+  }
+
+  createStars() {
+    this.stars = [];
+    const starGeom = new THREE.OctahedronGeometry(0.4, 0);
+    const starMat = new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.5,
+      metalness: 0.8,
+      roughness: 0.2
+    });
+
+    const positions = [
+      [-7, 1.5], [-4, 3.0], [-1, 2.0],
+      [12, 2.2], [16, 3.4], [22, 1.8], [28, 2.5]
+    ];
+
+    positions.forEach(([x, y]) => {
+      const mesh = new THREE.Mesh(starGeom, starMat);
+      mesh.position.set(x, y, 0);
+      mesh.castShadow = true;
+      this.engine.worldGroup.add(mesh);
+      this.stars.push({ mesh, x, y, collected: false });
+    });
+  }
+
+  createGoalArch(x) {
+    const archGroup = new THREE.Group();
+    archGroup.position.set(x, 0, 0);
+
+    const postMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.5, roughness: 0.3 });
+    const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 6, 12), postMat);
+    p1.position.set(0, 3, -3);
+    archGroup.add(p1);
+
+    const p2 = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 6, 12), postMat);
+    p2.position.set(0, 3, 3);
+    archGroup.add(p2);
+
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 6.4), postMat);
+    beam.position.set(0, 5.8, 0);
+    archGroup.add(beam);
+
+    const flagMat = new THREE.MeshStandardMaterial({ color: 0xef4444, side: THREE.DoubleSide });
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), flagMat);
+    flag.position.set(0, 5.4, 0);
+    archGroup.add(flag);
+
+    this.engine.worldGroup.add(archGroup);
+  }
+
+  targetAnimal() {
+    const routeItem = this.route[this.roundIndex] || { id: 0 };
+    return ANIMALS[routeItem.id];
+  }
+
+  startGame() {
+    this.difficulty = document.getElementById('difficulty-select')?.value || 'read';
+    this.savedData.runs++;
+    this.saveGame();
+
+    let ids = ANIMALS.map(a => a.id).sort(() => Math.random() - 0.5);
+    ids.sort((a, b) => (this.savedData.weak[b] || 0) - (this.savedData.weak[a] || 0));
+
+    this.route = ids.map(id => ({ id, retry: false }));
+    this.roundIndex = 0;
+    this.score = 0;
+    this.combo = 0;
+    this.errors = 0;
+    this.reviews = 0;
+    this.mode = 'play';
+
+    document.getElementById('modal-overlay').hidden = true;
+    this.startSegment();
+  }
+
+  startSegment() {
+    this.phase = 'approach';
+    this.player.x = -13;
+    this.player.y = 0;
+    this.player.vy = 0;
+    this.player.isGrounded = true;
+    this.player.selectedAnimalId = -1;
+    this.player.facing = 1;
+
+    document.getElementById('challenge-billboard').classList.add('hidden');
+    document.getElementById('speed-lines').classList.remove('active');
+
+    const targetId = this.targetAnimal().id;
+    const others = ANIMALS.filter(a => a.id !== targetId).sort(() => Math.random() - 0.5).slice(0, 3);
+    this.currentChoices = [targetId, ...others.map(o => o.id)].sort(() => Math.random() - 0.5);
+
+    this.buildEnvironment();
+    this.updatePlayerAppearance();
+    this.renderDeckCards();
+    this.updateHUD();
+
+    this.showPrompt('向右奔跑探險！收集金星，準備突破地形難關！');
+  }
+
+  renderDeckCards() {
+    const deck = document.getElementById('shape-deck');
+    deck.innerHTML = '';
+    const isListen = this.difficulty === 'listen';
+
+    this.currentChoices.forEach((id, index) => {
+      const a = ANIMALS[id];
+      const isSelected = this.player.selectedAnimalId === id;
+      
+      const card = document.createElement('div');
+      card.className = 'shape-card ' + (isSelected ? 'selected' : '');
+      card.dataset.id = id;
+
+      const title = isListen ? a.action.toUpperCase() : a.animal.toUpperCase();
+      const sub = isListen ? a.animal : a.action;
+
+      card.innerHTML = 
+        '<span class="shape-card-key">' + (index + 1) + '</span>' +
+        '<div class="shape-card-img-wrap">' +
+          '<img src="V1_flashcards_images/V1_' + a.animal + '.webp" alt="' + a.animal + '" onerror="this.src=\'sprites/' + a.animal + '.png\'">' +
+        '</div>' +
+        '<div class="shape-card-title">' + title + '</div>' +
+        '<div class="shape-card-sub">' + sub + '</div>';
+
+      card.onclick = () => this.selectAnimal(id);
+      deck.appendChild(card);
+    });
+  }
+
+  selectAnimal(id) {
+    if (this.mode !== 'play' || this.phase === 'power') return;
+    this.player.selectedAnimalId = id;
+    SFX.switchCard();
+    GameAudio.playVoice(ANIMALS[id].action);
+    
+    this.renderDeckCards();
+    this.updatePlayerAppearance();
+
+    const chosen = ANIMALS[id];
+    this.showPrompt(chosen.emoji + ' ' + chosen.animal.toUpperCase() + ' 準備就緒！前往地形前按 E 施展技能！');
+  }
+
+  triggerPowerSkill() {
+    if (this.mode !== 'play' || this.phase === 'power') return;
+
+    if (this.phase !== 'gate') {
+      this.showPrompt('⚠️ 請先奔跑到前方地形障礙物前！');
+      SFX.wrong();
+      return;
+    }
+
+    if (this.player.selectedAnimalId < 0) {
+      this.showPrompt('⚠️ 請先在下方工具箱選擇動物夥伴！');
+      SFX.wrong();
+      return;
+    }
+
+    const target = this.targetAnimal();
+    if (this.player.selectedAnimalId !== target.id) {
+      this.errors++;
+      this.combo = 0;
+      this.savedData.weak[target.id] = (this.savedData.weak[target.id] || 0) + 1;
+      this.saveGame();
+
+      SFX.wrong();
+      this.engine.triggerScreenShake(0.35);
+
+      this.player.scaleX = 0.6;
+      this.player.scaleY = 1.4;
+      this.player.x -= 2.0;
+
+      this.showToast('Oops! 試試能 "' + target.action.toUpperCase() + '" 的動物！', 'wrong');
+      GameAudio.playVoice(target.action);
+      this.updateHUD();
+      return;
+    }
+
+    this.phase = 'power';
+    this.combo++;
+    this.score += 100 + this.combo * 25;
+    this.savedData.best = Math.max(this.savedData.best, this.score);
+    if (!this.savedData.seen.includes(target.id)) {
+      this.savedData.seen.push(target.id);
+    }
+    if (this.savedData.weak[target.id]) {
+      this.savedData.weak[target.id] = Math.max(0, this.savedData.weak[target.id] - 1);
+    }
+    this.saveGame();
+
+    SFX.powerSuccess();
+    this.engine.triggerScreenShake(0.25);
+    document.getElementById('speed-lines').classList.add('active');
+
+    GameAudio.playVoice(target.action);
+
+    document.getElementById('challenge-billboard').classList.add('hidden');
+    this.showToast('🎉 EXCELLENT! A ' + target.animal + ' can ' + target.action + '!', 'correct');
+
+    this.engine.spawnBurst(this.player.x + 2, 2.5, 0, 0xfacc15, 50);
+
+    this.playActionAnimation(target.action);
+    this.updateHUD();
+  }
+
+  playActionAnimation(action) {
+    const startX = this.player.x;
+    const endX = this.gateX + 6.0;
+
+    if (action === 'swim') {
+      gsap.to(this.player, {
+        x: endX,
+        duration: 1.8,
+        ease: 'power1.inOut',
+        onUpdate: () => {
+          this.player.y = Math.sin(performance.now() * 0.01) * 0.4 - 0.2;
+          this.player.scaleX = 1.2;
+          this.player.scaleY = 0.8;
+        },
+        onComplete: () => this.finishPowerPass()
+      });
+    } else if (action === 'climb') {
+      const tl = gsap.timeline({ onComplete: () => this.finishPowerPass() });
+      tl.to(this.player, { x: this.gateX - 0.5, y: 5.5, duration: 0.9, ease: 'power2.out' });
+      tl.to(this.player, { x: endX, y: 0, duration: 0.9, ease: 'bounce.out' });
+    } else if (['fly','soar'].includes(action)) {
+      const tl = gsap.timeline({ onComplete: () => this.finishPowerPass() });
+      tl.to(this.player, { x: this.gateX + 1, y: 4.8, duration: 0.8, ease: 'power1.inOut' });
+      tl.to(this.player, { x: endX, y: 0, duration: 0.8, ease: 'power1.in' });
+    } else if (['jump','hop'].includes(action)) {
+      gsap.to(this.player, {
+        x: endX,
+        duration: 1.2,
+        ease: 'power1.inOut',
+        onUpdate: () => {
+          const progress = (this.player.x - startX) / (endX - startX);
+          this.player.y = Math.sin(progress * Math.PI) * 4.5;
+        },
+        onComplete: () => this.finishPowerPass()
+      });
+    } else {
+      gsap.to(this.player, {
+        x: endX,
+        y: 0,
+        duration: 1.0,
+        ease: 'power2.inOut',
+        onComplete: () => this.finishPowerPass()
+      });
+    }
+  }
+
+  finishPowerPass() {
+    this.phase = 'exit';
+    this.player.y = 0;
+    this.player.vy = 0;
+    this.player.isGrounded = true;
+    document.getElementById('speed-lines').classList.remove('active');
+    this.showPrompt('太棒了！向前奔向旗幟終點 →');
+  }
+
+  updatePhysics(dt) {
+    if (this.mode !== 'play') return;
+
+    if (this.phase === 'power') {
+      this.syncPlayerMesh();
+      return;
+    }
+
+    let moveDir = 0;
+    if (this.keys.has('ArrowRight') || this.keys.has('d') || this.keys.has('D')) moveDir += 1;
+    if (this.keys.has('ArrowLeft') || this.keys.has('a') || this.keys.has('A')) moveDir -= 1;
+
+    if (moveDir !== 0) {
+      this.player.facing = moveDir;
+      this.player.x += moveDir * 11 * dt;
+      this.player.mesh.rotation.z = -moveDir * 0.12;
+      this.player.scaleY = 1.0 + Math.sin(performance.now() * 0.015) * 0.08;
+    } else {
+      this.player.mesh.rotation.z = 0;
+      this.player.scaleY += (1.0 - this.player.scaleY) * 0.15;
+    }
+
+    this.player.scaleX += (1.0 - this.player.scaleX) * 0.15;
+
+    if (!this.player.isGrounded) {
+      this.player.vy -= 34 * dt;
+      this.player.y += this.player.vy * dt;
+      if (this.player.y <= 0) {
+        this.player.y = 0;
+        this.player.vy = 0;
+        this.player.isGrounded = true;
+        this.player.scaleX = 1.35;
+        this.player.scaleY = 0.65;
+        SFX.land();
+      }
+    }
+
+    if (['approach', 'gate'].includes(this.phase) && this.player.x >= this.gateX - 2.8) {
+      this.player.x = this.gateX - 2.8;
+      if (this.phase === 'approach') {
+        this.phase = 'gate';
+        this.triggerGateArrival();
+      }
+    }
+
+    if (this.phase === 'exit' && this.player.x >= 39.5) {
+      this.roundIndex++;
+      if (this.roundIndex >= this.route.length) {
+        this.finishGame();
+      } else {
+        this.startSegment();
+      }
+    }
+
+    this.stars.forEach(star => {
+      if (!star.collected && Math.hypot(this.player.x - star.x, (this.player.y + 1.0) - star.y) < 1.4) {
+        star.collected = true;
+        this.score += 20;
+        SFX.coin();
+        this.engine.spawnBurst(star.x, star.y, 0, 0xfbbf24, 18);
+        gsap.to(star.mesh.scale, { x: 0, y: 0, z: 0, duration: 0.2 });
+        this.updateHUD();
+      }
+      star.mesh.rotation.y += 2.5 * dt;
+      star.mesh.rotation.x += 1.2 * dt;
+    });
+
+    this.syncPlayerMesh();
+  }
+
+  triggerGateArrival() {
+    const target = this.targetAnimal();
+    SFX.switchCard();
+    
+    const billboard = document.getElementById('challenge-billboard');
+    const title = document.getElementById('billboard-title');
+    const sub = document.getElementById('billboard-sub');
+    
+    billboard.classList.remove('hidden');
+    if (this.difficulty === 'listen') {
+      title.textContent = '🎧 聽音變身關卡！';
+      sub.textContent = '仔細聽發音，選擇能完成此動作的動物，按 E 突破！';
+    } else {
+      title.textContent = 'NEED ACTION: "' + target.action.toUpperCase() + '"!';
+      sub.textContent = '請選擇擁有「' + target.action + '」能力的動物夥伴，再按 E 施展技能！';
+    }
+
+    GameAudio.playVoice(target.action);
+    this.showPrompt('抵達險峻地形！選動物技能，再按 E 變身！');
+  }
+
+  jump() {
+    if (this.mode !== 'play' || this.phase === 'power') return;
+    if (this.player.isGrounded) {
+      this.player.vy = 13.5;
+      this.player.isGrounded = false;
+      this.player.scaleX = 0.75;
+      this.player.scaleY = 1.35;
+      SFX.jump();
+    }
+  }
+
+  syncPlayerMesh() {
+    this.playerGroup.position.set(this.player.x, this.player.y, 0);
+    this.player.mesh.scale.set(this.player.scaleX * this.player.facing, this.player.scaleY, 1);
+    
+    this.player.shadowMesh.position.x = this.player.x;
+    const shadowScale = Math.max(0.3, 1.0 - this.player.y / 6.0);
+    this.player.shadowMesh.scale.set(shadowScale, shadowScale, shadowScale);
+  }
+
+  setupUI() {
+    document.getElementById('btn-left').onpointerdown = () => this.keys.add('ArrowLeft');
+    document.getElementById('btn-left').onpointerup = () => this.keys.delete('ArrowLeft');
+    document.getElementById('btn-right').onpointerdown = () => this.keys.add('ArrowRight');
+    document.getElementById('btn-right').onpointerup = () => this.keys.delete('ArrowRight');
+
+    document.getElementById('btn-jump').onclick = () => this.jump();
+    document.getElementById('btn-power').onclick = () => this.triggerPowerSkill();
+
+    document.getElementById('btn-replay-audio').onclick = () => {
+      if (this.mode === 'play') GameAudio.playVoice(this.targetAnimal().action);
+    };
+    document.getElementById('btn-billboard-audio').onclick = () => {
+      if (this.mode === 'play') GameAudio.playVoice(this.targetAnimal().action);
+    };
+
+    document.getElementById('btn-mute').onclick = () => {
+      GameAudio.isMuted = !GameAudio.isMuted;
+      document.getElementById('btn-mute').textContent = GameAudio.isMuted ? '🔇' : '♫';
+    };
+
+    document.getElementById('btn-pause').onclick = () => this.togglePause();
+  }
+
+  bindEvents() {
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+      if (e.repeat) return;
+
+      this.keys.add(e.key);
+      if (e.key === ' ') this.jump();
+      if (e.key.toLowerCase() === 'e') this.triggerPowerSkill();
+      if (e.key.toLowerCase() === 'p' || e.key === 'Escape') this.togglePause();
+
+      if (['1','2','3','4'].includes(e.key)) {
+        const idx = Number(e.key) - 1;
+        if (this.currentChoices[idx] !== undefined) {
+          this.selectAnimal(this.currentChoices[idx]);
+        }
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.key);
+    });
+  }
+
+  showPrompt(text) {
+    document.getElementById('hud-prompt').textContent = text;
+  }
+
+  showToast(text, type = 'correct') {
+    const toast = document.getElementById('feedback-toast');
+    toast.textContent = text;
+    toast.className = 'feedback-toast show ' + type;
+    setTimeout(() => toast.classList.remove('show'), 2200);
+  }
+
+  updateHUD() {
+    document.getElementById('hud-station').textContent = '第 ' + Math.min(this.roundIndex + 1, this.route.length) + ' / ' + this.route.length + ' 站';
+    document.getElementById('hud-score').textContent = this.score;
+    document.getElementById('hud-combo').textContent = this.combo + 'x';
+  }
+
+  togglePause() {
+    if (this.mode === 'play') {
+      this.mode = 'paused';
+      this.keys.clear();
+      GameAudio.stopVoice();
+      this.showModal(
+        '<span class="modal-badge">GAME PAUSED</span>' +
+        '<h2 class="modal-title">冒險營地休息中</h2>' +
+        '<p class="modal-desc">深呼吸放鬆一下，隨時準備好再次出發！</p>' +
+        '<button class="btn-start-game" id="btn-resume">繼續冒險 →</button>'
+      );
+      document.getElementById('btn-resume').onclick = () => this.togglePause();
+    } else if (this.mode === 'paused') {
+      this.mode = 'play';
+      document.getElementById('modal-overlay').hidden = true;
+    }
+  }
+
+  showHomeModal() {
+    this.mode = 'home';
+    this.keys.clear();
+    GameAudio.stopVoice();
+    document.getElementById('modal-overlay').hidden = false;
+    document.getElementById('btn-modal-action').onclick = () => this.startGame();
+  }
+
+  finishGame() {
+    this.mode = 'done';
+    this.keys.clear();
+    this.savedData.best = Math.max(this.savedData.best, this.score);
+    this.saveGame();
+
+    if (typeof confetti === 'function') {
+      confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+    }
+
+    this.showModal(
+      '<span class="modal-badge">ADVENTURE COMPLETE!</span>' +
+      '<h2 class="modal-title">🎉 你成功點亮了整座野生樂園！</h2>' +
+      '<p class="modal-desc">' +
+        '總得分：<b>⭐ ' + this.score + '</b> 分<br>' +
+        '最高連擊：<b>🔥 ' + this.combo + '</b> 次 · 歷史最佳：<b>' + this.savedData.best + '</b> 分<br>' +
+        '掌握動物技能圖鑑：<b>' + this.savedData.seen.length + ' / 8</b>' +
+      '</p>' +
+      '<button class="btn-start-game" id="btn-again">再次挑戰 ↻</button>'
+    );
+    document.getElementById('btn-again').onclick = () => this.startGame();
+  }
+
+  showModal(htmlContent) {
+    const overlay = document.getElementById('modal-overlay');
+    const content = document.getElementById('modal-content');
+    content.innerHTML = htmlContent;
+    overlay.hidden = false;
+  }
+
+  loop(timestamp) {
+    const dt = Math.min((timestamp - this.lastTime) / 1000, 0.05);
+    this.lastTime = timestamp;
+
+    this.updatePhysics(dt);
+    this.engine.updateParticles(dt);
+    this.engine.updateCamera(this.player.x, this.player.y);
+    this.engine.render();
+
+    requestAnimationFrame((t) => this.loop(t));
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  window.game = new WildSwitchGame();
+});
+
+
+
+

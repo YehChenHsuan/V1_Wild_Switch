@@ -1,1 +1,117 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wild Switch 動物變身冒險</title><link rel="icon" href="data:,"><link rel="stylesheet" href="adventure.css"></head><body><header><b>✳ WILD SWITCH <small>動物變身冒險</small></b><div><button id="mute">♫ 聲音開</button> <button id="pause">Ⅱ 暫停</button></div></header><main><div class="headline"><div><small>THE PARK IS YOUR PLAYGROUND</small><h1>聽見技能，<em>變身出發！</em></h1></div><p>V1 第 04–09 頁<br>8 位動物夥伴 × 8 種冒險技能</p></div><section class="stage"><div class="hud"><span id="round">準備探險</span><b id="score">★ 0</b><span id="combo">跳起來收集星星</span></div><canvas id="world" width="1200" height="540" tabindex="0" aria-label="方向鍵移動，空白鍵跳躍，選動物後按 E 通過地形"></canvas><div id="overlay"></div><div class="bottom"><span id="status" role="status">準備冒險</span><button id="listen">▶ 再聽一次</button></div></section><section class="deck"><div><small>YOUR SHAPESHIFT KIT</small><h2>動物變身工具箱</h2><p>← → 移動 · 空白鍵跳躍<br>1–4 變身 · E 施展技能</p></div><div id="cards"></div></section><nav><button data-key="ArrowLeft">◀</button><button data-key="ArrowRight">▶</button><button id="jump">↑ 跳躍</button><button id="power">✦ 施展技能 E</button></nav><footer><span>每趟路線都不同。讓英文成為過關的超能力。</span><span id="collection"></span></footer></main><script src="adventure.js"></script></body></html>
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Wild Switch: 動物變身大冒險 3D (Animal Shapeshift Adventure)</title>
+  <meta name="description" content="ALICE ESL V1 專屬 2.5D/3D 動物變身橫向卷軸冒險遊戲，結合自然發音、動作單字與地形技能突破。">
+  <link rel="icon" href="data:,">
+  
+  <!-- 外部樣式表與 Google Fonts -->
+  <link rel="stylesheet" href="adventure.css">
+  
+  <!-- 外部 3D 與動畫函式庫 (Three.js, GSAP, Canvas Confetti) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+</head>
+<body>
+
+  <!-- 3D 視窗與渲染層 -->
+  <div id="game-viewport">
+    <div id="webgl-container"></div>
+    <div class="speed-lines" id="speed-lines"></div>
+  </div>
+
+  <!-- 主機級 3D 遊戲 HUD 覆蓋層 -->
+  <div class="hud-layer">
+    
+    <!-- 頂部狀態列 -->
+    <header class="hud-header">
+      <!-- 品牌標題 -->
+      <div class="hud-brand hud-interactive">
+        <span class="brand-icon">🦁</span>
+        <div class="brand-title">WILD SWITCH</div>
+        <span class="brand-badge">V1 3D</span>
+      </div>
+
+      <!-- 中央進度與即時指令目標 -->
+      <div class="hud-goal-banner">
+        <span class="goal-station" id="hud-station">第 1 / 8 站</span>
+        <span class="goal-prompt" id="hud-prompt">向右前進，收集閃耀星星！</span>
+      </div>
+
+      <!-- 右側計分與控制鍵 -->
+      <div class="hud-stats hud-interactive">
+        <div class="stat-pill">
+          <span class="stat-icon">⭐</span>
+          <span class="stat-value" id="hud-score">0</span>
+        </div>
+        <div class="stat-pill combo-pill">
+          <span class="stat-icon">🔥</span>
+          <span class="stat-value" id="hud-combo">0x</span>
+        </div>
+        <button class="hud-icon-btn" id="btn-replay-audio" title="再聽一次單字發音">📢</button>
+        <button class="hud-icon-btn" id="btn-mute" title="開關音效">♫</button>
+        <button class="hud-icon-btn" id="btn-pause" title="暫停遊戲">Ⅱ</button>
+      </div>
+    </header>
+
+    <!-- 中央 3D 地形關卡路牌 (當抵達障礙時浮現) -->
+    <div class="challenge-billboard hidden" id="challenge-billboard">
+      <div class="billboard-icon" id="billboard-icon">🚧</div>
+      <div class="billboard-info">
+        <div class="billboard-title" id="billboard-title">ACTION REQUIRED!</div>
+        <div class="billboard-sub" id="billboard-sub">請選擇擁有此能力的動物，再按下技能鍵！</div>
+      </div>
+      <button class="billboard-replay-btn" id="btn-billboard-audio">
+        <span>▶ 聽題目</span>
+      </button>
+    </div>
+
+    <!-- 底部 3D 動物變身工具箱與虛擬控制鍵 -->
+    <div class="deck-container hud-interactive">
+      <div class="deck-cards" id="shape-deck">
+        <!-- 由 JS 動態生成 4 張具備 3D 浮雕質感的卡牌 -->
+      </div>
+      
+      <!-- 控制列：行動裝置與鍵盤操作指示 -->
+      <div class="controls-bar">
+        <button class="btn-3d btn-move" data-dir="-1" id="btn-left">◀</button>
+        <button class="btn-3d btn-jump" id="btn-jump">↑ 跳躍 (SPACE)</button>
+        <button class="btn-3d btn-move" data-dir="1" id="btn-right">▶</button>
+        <button class="btn-3d btn-power" id="btn-power">✦ 施展技能 (E)</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 回饋 Toast 浮動特效 (答對 / 答錯) -->
+  <div class="feedback-toast" id="feedback-toast">🎉 EXCELLENT! +100</div>
+
+  <!-- 遊戲全螢幕彈跳視窗 (歡迎、暫停、過關總結) -->
+  <div id="modal-overlay">
+    <div class="game-modal" id="modal-content">
+      <span class="modal-badge">ALICE ESL V1 ADVENTURE</span>
+      <h2 class="modal-title">把英文變成 3D 變身超能力！</h2>
+      <p class="modal-desc">
+        操控小英雄左右奔馳、跳躍收集金星。<br>
+        遇到險峻地形時，辨識英文動作，選擇對應動物夥伴，<br>
+        按 <b>E 施展超能變身</b> 飛越、攀爬、潛游突破難關！
+      </p>
+
+      <div class="modal-select-wrap">
+        <select class="modal-select" id="difficulty-select">
+          <option value="read">📖 探索模式（單字看板 ＋ 真人發音）</option>
+          <option value="listen">🎧 聽力挑戰模式（純聽動作音 ➔ 變身）</option>
+        </select>
+      </div>
+
+      <button class="btn-start-game" id="btn-modal-action">開始探險 →</button>
+    </div>
+  </div>
+
+  <!-- 核心遊戲邏輯腳本 -->
+  <script src="adventure.js"></script>
+</body>
+</html>
